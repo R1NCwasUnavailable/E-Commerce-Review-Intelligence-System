@@ -1,7 +1,9 @@
 import os
+import sys
 import torch
 import pandas as pd
-from datasets import load_dataset, Dataset, concatenate_datasets
+from pathlib import Path
+from datasets import load_dataset, Dataset
 from transformers import (
     AutoTokenizer, 
     AutoModelForSequenceClassification, 
@@ -9,18 +11,25 @@ from transformers import (
     TrainingArguments
 )
 from sklearn.model_selection import train_test_split
+
+# Resolve paths relative to this script's location
+SCRIPT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = SCRIPT_DIR.parent
+
+# Add mlops dir to path so data_loader can be imported
+sys.path.insert(0, str(SCRIPT_DIR))
 from data_loader import fetch_flywheel_data
 
 # Configuration
 MODEL_NAME = "distilbert-base-uncased"
-OUTPUT_DIR = "./results"
-NUM_EPOCHS = 1
+OUTPUT_DIR = str(SCRIPT_DIR / "results")
+FINE_TUNED_DIR = str(SCRIPT_DIR / "fine_tuned_model")
+NUM_EPOCHS = 2
 BATCH_SIZE = 16
 
 def prepare_data():
     print("Loading public dataset (Amazon Polarity)...")
-    # Load a small subset for demonstration purposes
-    amazon_dataset = load_dataset("amazon_polarity", split="train[:500]")
+    amazon_dataset = load_dataset("amazon_polarity", split="train[:1000]")
     
     # Amazon Polarity labels: 1 = positive, 0 = negative
     def map_amazon_labels(example):
@@ -37,11 +46,15 @@ def prepare_data():
     
     if not df_flywheel.empty:
         df_public = pd.concat([df_public, df_flywheel.rename(columns={"label": "label_str"})], ignore_index=True)
-        print("Combined public data with flywheel data.")
+        print(f"Combined public data with {len(df_flywheel)} flywheel samples.")
+    else:
+        print("No flywheel data available. Training on public data only.")
     
     # Map string labels to integers for training
     label2id = {"negative": 0, "neutral": 1, "positive": 2}
     df_public["label"] = df_public["label_str"].map(lambda x: label2id.get(x.lower(), 1))
+    
+    print(f"Total training samples: {len(df_public)}")
     
     # Split into train/val
     train_df, val_df = train_test_split(df_public, test_size=0.1, random_state=42)
@@ -58,7 +71,6 @@ def train():
     print(f"Loading tokenizer and model: {MODEL_NAME}")
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     
-    # Tokenize function
     def tokenize_function(examples):
         return tokenizer(examples["text"], padding="max_length", truncation=True, max_length=128)
         
@@ -81,6 +93,8 @@ def train():
         num_train_epochs=NUM_EPOCHS,
         weight_decay=0.01,
         save_strategy="epoch",
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
     )
     
     trainer = Trainer(
@@ -93,10 +107,10 @@ def train():
     print("Starting training...")
     trainer.train()
     
-    print("Saving final model...")
-    model.save_pretrained("./fine_tuned_model")
-    tokenizer.save_pretrained("./fine_tuned_model")
-    print("Training complete! Model saved to ./fine_tuned_model")
+    print(f"Saving final model to {FINE_TUNED_DIR}...")
+    model.save_pretrained(FINE_TUNED_DIR)
+    tokenizer.save_pretrained(FINE_TUNED_DIR)
+    print(f"Training complete! Model saved to {FINE_TUNED_DIR}")
 
 if __name__ == "__main__":
     train()

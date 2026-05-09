@@ -10,9 +10,10 @@ venv/
 .env
 
 # ML Outputs
-backend/results/
-backend/logs/
 backend/mlops/fine_tuned_model/
+backend/mlops/results/
+backend/results/
+backend/fine_tuned_model/
 
 # OS
 .DS_Store

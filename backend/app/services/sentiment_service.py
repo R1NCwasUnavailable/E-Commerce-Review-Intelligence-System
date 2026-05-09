@@ -1,59 +1,77 @@
+import os
 import re
-from transformers import pipeline
+from pathlib import Path
+from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer
 import torch
 
 # Global dictionary to hold models
 models = {}
 
+# Path to fine-tuned model
+FINE_TUNED_MODEL_PATH = Path(__file__).resolve().parent.parent.parent / "mlops" / "fine_tuned_model"
+
 # Common product aspects to look for
 ASPECTS = ["battery", "camera", "display", "screen", "price", "performance", "build", "quality", "design", "software", "ui"]
 
 def init_models():
+    """Initialize ML models. Prefers fine-tuned model if available, falls back to default."""
     if "sentiment_classifier" not in models:
-        # In latest transformers, device=0 is valid, but we can also use device_map="auto" if accelerated
         device = 0 if torch.cuda.is_available() else -1
-        models["sentiment_classifier"] = pipeline("sentiment-analysis", device=device)
+        
+        if FINE_TUNED_MODEL_PATH.exists() and (FINE_TUNED_MODEL_PATH / "model.safetensors").exists():
+            print(f"Loading fine-tuned model from {FINE_TUNED_MODEL_PATH}")
+            tokenizer = AutoTokenizer.from_pretrained(str(FINE_TUNED_MODEL_PATH))
+            model = AutoModelForSequenceClassification.from_pretrained(str(FINE_TUNED_MODEL_PATH))
+            models["sentiment_classifier"] = pipeline(
+                "sentiment-analysis",
+                model=model,
+                tokenizer=tokenizer,
+                device=device
+            )
+        else:
+            print("Fine-tuned model not found. Using default distilbert-base-uncased-finetuned-sst-2-english.")
+            models["sentiment_classifier"] = pipeline("sentiment-analysis", device=device)
+        
         models["summarizer"] = pipeline("summarization", model="t5-small", device=device)
+
+
+def _normalize_sentiment(label: str) -> str:
+    """Normalize sentiment labels from different model outputs to standard labels."""
+    label = label.lower().strip()
+    if label in ("positive", "label_2"):
+        return "positive"
+    elif label in ("negative", "label_0"):
+        return "negative"
+    else:
+        return "neutral"
+
 
 def extract_aspect_sentiments(text: str):
     aspects = {}
-    # Split text into simple sentences roughly
-    sentences = re.split(r'[.!?]', text)
+    sentences = re.split(r'[.!?,;]', text)
     for sentence in sentences:
         sentence = sentence.strip()
         if not sentence:
             continue
         
-        # Check if any aspect is in the sentence
         found_aspects = [aspect for aspect in ASPECTS if aspect in sentence.lower()]
         if found_aspects:
-            # Predict sentiment for this sentence
             result = models["sentiment_classifier"](sentence)[0]
-            sentiment_label = result["label"].lower()
-            if sentiment_label == "positive":
-                sentiment_label = "positive"
-            elif sentiment_label == "negative":
-                sentiment_label = "negative"
-            else:
-                sentiment_label = "neutral"
+            sentiment_label = _normalize_sentiment(result["label"])
                 
             for aspect in found_aspects:
                 aspects[aspect] = sentiment_label
                 
     return aspects
 
-def analyze_text(text: str):
-    # Overall sentiment
-    result = models["sentiment_classifier"](text)[0]
-    overall_sentiment = result["label"].lower()
-    if overall_sentiment == "positive":
-        overall_sentiment = "positive"
-    elif overall_sentiment == "negative":
-        overall_sentiment = "negative"
-    else:
-        overall_sentiment = "neutral"
 
-    # Aspect-based sentiment
+def analyze_text(text: str):
+    """Perform overall sentiment + aspect-based sentiment analysis."""
+    init_models()  # Ensure models are loaded
+    
+    result = models["sentiment_classifier"](text)[0]
+    overall_sentiment = _normalize_sentiment(result["label"])
+
     aspects = extract_aspect_sentiments(text)
 
     return {
@@ -62,20 +80,20 @@ def analyze_text(text: str):
         "aspects": aspects
     }
 
+
 def summarize_reviews(reviews_text: list):
+    """Generate a summary of multiple reviews using T5."""
+    init_models()  # Ensure models are loaded
+    
     if not reviews_text:
         return "No reviews to summarize."
     
-    # Combine texts
     combined_text = " ".join(reviews_text)
     
-    # Truncate if too long (t5-small max length is 512 tokens usually)
-    # Simple word truncation
     words = combined_text.split()
     if len(words) > 400:
         combined_text = " ".join(words[:400])
         
-    # t5-small requires 'summarize: ' prefix
     input_text = "summarize: " + combined_text
     
     try:
