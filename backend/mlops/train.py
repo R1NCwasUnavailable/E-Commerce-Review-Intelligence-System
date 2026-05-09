@@ -81,7 +81,6 @@ def train():
         num_train_epochs=NUM_EPOCHS,
         weight_decay=0.01,
         save_strategy="epoch",
-        logging_dir="./logs",
     )
     
     trainer = Trainer(

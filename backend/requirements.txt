@@ -7,3 +7,4 @@ python-dotenv
 datasets
 pandas
 scikit-learn
+accelerate>=1.1.0
