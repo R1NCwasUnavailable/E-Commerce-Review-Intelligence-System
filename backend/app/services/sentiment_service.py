@@ -1,7 +1,7 @@
 import os
 import re
 from pathlib import Path
-from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import pipeline, AutoModelForSequenceClassification, AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
 
 # Global dictionary to hold models
@@ -32,7 +32,14 @@ def init_models():
             print("Fine-tuned model not found. Using default distilbert-base-uncased-finetuned-sst-2-english.")
             models["sentiment_classifier"] = pipeline("sentiment-analysis", device=device)
         
-        models["summarizer"] = pipeline("summarization", model="t5-small", device=device)
+        # Load T5 explicitly instead of via pipeline
+        print("Loading T5 model for summarization...")
+        models["t5_tokenizer"] = AutoTokenizer.from_pretrained("t5-small")
+        # Ensure we move the model to the appropriate device
+        t5_model = AutoModelForSeq2SeqLM.from_pretrained("t5-small")
+        if device == 0:
+            t5_model = t5_model.to("cuda")
+        models["t5_model"] = t5_model
 
 
 def _normalize_sentiment(label: str) -> str:
@@ -97,8 +104,18 @@ def summarize_reviews(reviews_text: list):
     input_text = "summarize: " + combined_text
     
     try:
-        summary_result = models["summarizer"](input_text, max_length=50, min_length=10, do_sample=False)
-        return summary_result[0]['summary_text']
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        inputs = models["t5_tokenizer"](input_text, return_tensors="pt", truncation=True, max_length=512)
+        if device == "cuda":
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            
+        outputs = models["t5_model"].generate(
+            **inputs, 
+            max_new_tokens=50, 
+            min_length=10, 
+            do_sample=False
+        )
+        return models["t5_tokenizer"].decode(outputs[0], skip_special_tokens=True)
     except Exception as e:
         print("Summarization error:", e)
         return "Could not generate summary."
